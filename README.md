@@ -2,7 +2,7 @@
 AWS Cloudformation 
 
 The aws.yml file contains code for cloudformation stacks. 
-this yml code is very simple and easy to understandable for beginners.
+this yml code is very simple and easy to understande for beginners.
 Stack resources are:
 1. vpc
 2. Internet Gateway
