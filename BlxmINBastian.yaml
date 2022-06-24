@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Sample Template for Investor Portal
+
+Parameters:
+  VPCId:
+    Type: String
+    Default: "vpc-091e94554a3b4699e"  #Replace with newly Created VPC ID
+
+  AvailabilityZoneA:
+    Type: String
+    Default: "eu-west-1a"
+  
+  InstanceTypeParameterBastian: #Bastian VM
+    Description: Select instance Type
+    Type: String
+    Default: t3.nano
+
+  BastianVMSubnet:
+    Description: "Bastian VM is in Public Subnet A"
+    Type: String
+    Default: "subnet-0a84d706ff97543ee" #Check in which subnet you want to run your instance PVT or PUB change the name
+  
+  DefaultSecuirtyGroupName:
+    Type: String
+    Default: "sg-09214fa70a6709eb6" #Update the SG Name as per your VPC
+Resources:
+#Bastian Machine Elastic IP
+  BastianElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref BastianInstance
+
+ # Create KeyPair of Bastian Machine to putinto Bastian Machine
+  BastianKeyPair:
+    Type: 'AWS::EC2::KeyPair'
+    Properties:
+      KeyName: BastianKeyPair
+
+#Bastian Instance
+  BastianInstance:  #Make sure to change the Image ID incase of different Region.
+    Type: AWS::EC2::Instance
+    #DeletionPolicy: Retain
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZoneA
+      InstanceType: !Ref InstanceTypeParameterBastian
+      ImageId: ami-0d71ea30463e0ff8d                   #Change the AMI as your Region
+      KeyName: !Ref BastianKeyPair
+      IamInstanceProfile: EC2Deployer
+      Tags:
+        - Key: "Name"
+          Value: in-dev-bastian
+      NetworkInterfaces:
+      - GroupSet: 
+        - !Ref DefaultSecuirtyGroupName
+        #- Fn::ImportValue: IN-DefaultSecurityGroup
+        AssociatePublicIpAddress: 'false'
+        DeviceIndex: '0'
+        DeleteOnTermination: 'true'
+        SubnetId: !Ref BastianVMSubnet #  Fn::ImportValue: IN-PublicSubnet
+ 
+
+Outputs:
+  BastianInstanceName:
+    Value: !Ref BastianInstance
+    Description: Name of the Bastian Instance
+    Export:
+      Name: !Sub "${AWS::StackName}-BastianInstance"

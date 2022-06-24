@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Sample Template for Investor Portal
+
+Parameters:
+  TargetEnvr:
+    Type: String
+    # Default: dev
+    Description: "The target environment"
+
+  VPCId:
+    Type: String
+    Default: "vpc-091e94554a3b4699e"  #Replace with newly Created VPC ID
+  
+  AvailabilityZoneA:
+    Type: String
+    Default: "eu-west-1a"
+    
+  InstanceTypeParameterJenkins: # Jenkins VM
+    Description: Select instance Type
+    Type: String
+    Default: t2.xlarge
+  
+  DefaultSecuirtyGroupName:
+    Type: String
+    Default: "sg-09214fa70a6709eb6" #Update the SG Name as per your VPC
+  
+  JenkinsVMSubnetId:
+    Description: "Jenkins VM is in Private Subnet A"
+    Type: String
+    Default: "subnet-07e04600d6fa9c4f9" #Check in which subnet you want to run your instance PVT or PUB change the name
+Resources:
+ # Volume for Jenkins. 
+  JenkinsVolume:
+    Type: AWS::EC2::Volume
+    Properties: 
+      Size: 50
+      Encrypted: true
+      AvailabilityZone: !Ref AvailabilityZoneA
+      Tags:
+        - Key: "Name"
+          Value: in-prepro-volume-Jenkins
+    #DeletionPolicy: snapshot
+
+ # Create KeyPair of Jenkins Machine to putinto Bastian Machine  
+  JenkinsKeyPair:
+    Type: 'AWS::EC2::KeyPair'
+    Properties:
+      KeyName: JenkinsKeyPair
+
+  jenkinsMountPoint:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref JenkinsInstance
+      VolumeId: !Ref JenkinsVolume
+      Device: /dev/sdh
+  
+  JenkinsInstance:  #Make sure to change the Image ID incase of different Region.
+    Type: AWS::EC2::Instance
+    #DeletionPolicy: Retain
+    Properties:
+      InstanceType: !Ref InstanceTypeParameterJenkins
+      ImageId: ami-0d75513e7706cf2d9
+      KeyName: !Ref JenkinsKeyPair
+      IamInstanceProfile: INJenkins
+      Tags:
+        - Key: "Name"
+          Value: in-prepro-jenkinsvm
+      NetworkInterfaces:
+      - GroupSet: 
+        - !Ref DefaultSecuirtyGroupName
+        #- Fn::ImportValue: IN-DefaultSecurityGroup
+        AssociatePublicIpAddress: 'false'
+        DeviceIndex: '0'
+        DeleteOnTermination: 'true'
+        SubnetId: !Ref JenkinsVMSubnetId
+        #  Fn::ImportValue: IN-PublicSubnet
+
+Outputs:
+  JenkinsInstanceName:
+    Value: !Ref JenkinsInstance
+    Description: Name of the Jenkins Instance
+    Export:
+      Name: !Sub "${AWS::StackName}-JenkinsInstance"

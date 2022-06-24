@@ -1,0 +1,249 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS cloudfront-S3-ALB-EC2 webapp infrastructure using the existing"
+
+Parameters:
+  TargetEnvr:
+    Type: String
+    # Default: dev
+    Description: "The target environment"
+  VPCId:
+    Type: String
+    Default: "vpc-1fcea375"
+
+  EC2SubnetId:
+    Type: String
+    Default: "subnet-009b8e8a16b9fc55e"
+
+  ALBSecurityGroups:
+    Type: "List<AWS::EC2::SecurityGroup::Id>"
+    Default: "sg-07a7e500ab744194c"
+  ALBSubnets:
+    Type: "List<AWS::EC2::Subnet::Id>"
+    Default: "subnet-49762223, subnet-74a42708"
+
+  # DB Param
+  DBEngineVersion:
+    Description: "PostgreSQL version."
+    Type: String
+    Default: "12.8"
+    AllowedValues:
+      ["12.6", "12.7", "12.8", "12.9", "13.3", "13.4", "13.5", "14.1"]
+  DBMasterUsername:
+    Type: String
+  DBMasterUserPassword:
+    Description: "The master password for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot. Also ignored when ParentSecretStack is used)."
+    Type: String
+    NoEcho: true
+    MinLength: 8
+  DBInstanceClass:
+    Type: String
+    Default: "db.t3.small"
+  DBSecurityGroups:
+    Type: "List<AWS::EC2::SecurityGroup::Id>"
+    Default: "sg-062accc21d49ea771"
+  DBSubnetGroupName:
+    Type: String
+    Default: "default-vpc-1fcea375"
+
+Conditions:
+  IsProd: !Equals [!Ref TargetEnvr, "prod"]
+
+Resources:
+  # Elastic Container Repository
+  BlxmINECR:
+    Type: AWS::ECR::Repository
+    Properties:
+      ImageScanningConfiguration:
+        ScanOnPush: "true"
+      # LifecyclePolicy: LifecyclePolicy
+      RepositoryName: !Sub "investors-portal-api/${TargetEnvr}"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "in-ecr-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+  # RDS PostgreSQL
+  DBInstance:
+    # DeletionPolicy: Snapshot # default
+    UpdateReplacePolicy: Snapshot
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      DBInstanceIdentifier: !Sub "investors-portal-${TargetEnvr}"
+      AllocatedStorage: !If [IsProd, 100, 50]
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: !If [IsProd, 30, 7]
+      CopyTagsToSnapshot: true
+      DBInstanceClass: !Ref DBInstanceClass
+      DBName: !Sub "db_investors_portal_${TargetEnvr}"
+      Port: 5440
+      DBParameterGroupName: !Ref "AWS::NoValue"
+      DBSnapshotIdentifier: !Ref "AWS::NoValue"
+      VPCSecurityGroups: !Ref DBSecurityGroups
+      DBSubnetGroupName: !Ref DBSubnetGroupName
+      EnableIAMDatabaseAuthentication: false
+      Engine: postgres
+      EngineVersion: !Ref DBEngineVersion
+      KmsKeyId: !Ref "AWS::NoValue"
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterUserPassword
+      MultiAZ: !If [IsProd, true, false]
+      OptionGroupName: !Ref "AWS::NoValue"
+      PreferredBackupWindow: "02:00-02:30"
+      PreferredMaintenanceWindow: "sun:02:40-sun:03:10"
+      StorageType: gp2
+      StorageEncrypted: !Ref "AWS::NoValue"
+    # DeletionPolicy: Retain
+
+  # EC2 instance
+  BlxmINEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateName: in-ec2-template
+        Version: 6
+      IamInstanceProfile: EC2Deployer
+      SubnetId: !Ref EC2SubnetId
+      Tags:
+        - Key: "Name"
+          Value: !Sub "in-api-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+  # Cloudwatch log group
+  BlxmINApiLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/aws/ec2/instance/in-api-${TargetEnvr}"
+      RetentionInDays: !If [IsProd, 60, 5]
+      Tags:
+        - Key: "Name"
+          Value: !Sub "in-api-logs-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+  # Application load balancer
+  BlxmINALB:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Name: !Sub "in-api-lbs-${TargetEnvr}"
+      Scheme: "internet-facing"
+      Type: "application"
+      Subnets: !Ref ALBSubnets
+      SecurityGroups: !Ref ALBSecurityGroups
+      IpAddressType: "ipv4"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "in-api-lbs-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+  BlxmINHTTPListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      LoadBalancerArn: !Ref BlxmINALB
+      Port: 5111
+      Protocol: "HTTP"
+      DefaultActions:
+        - Order: 1
+          TargetGroupArn: !Ref BlxmINBETargetGroup
+          Type: "forward"
+    # DeletionPolicy: Retain
+
+  BlxmINBETargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      HealthCheckIntervalSeconds: 300
+      HealthCheckPath: "/"
+      Port: 5021
+      Protocol: "HTTP"
+      HealthCheckPort: "traffic-port"
+      HealthCheckProtocol: "HTTP"
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 10
+      TargetType: "instance"
+      Matcher:
+        HttpCode: "200"
+      HealthyThresholdCount: 2
+      VpcId: !Ref VPCId
+      Name: !Sub "in-api-${TargetEnvr}"
+      HealthCheckEnabled: true
+      Targets:
+        - Id: !Ref BlxmINEC2Instance
+          Port: 5021
+    # DeletionPolicy: Retain
+
+  # S3
+  BlxmINS3Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub "in-fe-${TargetEnvr}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: "true"
+        BlockPublicPolicy: "true"
+        IgnorePublicAcls: "true"
+        RestrictPublicBuckets: "true"
+    # DeletionPolicy: Retain
+
+  BlxmINS3BucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      PolicyDocument:
+        Id: PolicyForCloudFrontPrivateContent
+        Version: 2012-10-17
+        Statement:
+          - Sid: PolicyForCloudFrontPrivateContent
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity "
+                  - !Ref BlxmINCloudfrontOAI
+            Action: "s3:GetObject"
+            Resource: !Join
+              - ""
+              - - "arn:aws:s3:::"
+                - !Ref BlxmINS3Bucket
+                - /*
+      Bucket: !Ref BlxmINS3Bucket
+
+  BlxmINCloudfrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "in-fe-${TargetEnvr}"
+
+  # CloudFront
+  BlxmINCloudfrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "IN ${TargetEnvr}"
+        Origins:
+          - DomainName: !GetAtt BlxmINS3Bucket.RegionalDomainName
+            Id: !GetAtt BlxmINS3Bucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Join
+                - ""
+                - - "origin-access-identity/cloudfront/"
+                  - !Ref BlxmINCloudfrontOAI
+        Enabled: "true"
+        DefaultRootObject: index.html
+        # Aliases:
+        # - mysite.example.com
+        # - yoursite.example.com
+        DefaultCacheBehavior:
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          AllowedMethods:
+            - GET
+            - HEAD
+          TargetOriginId: !GetAtt BlxmINS3Bucket.RegionalDomainName
+          ViewerProtocolPolicy: redirect-to-https
+          LambdaFunctionAssociations:
+            - EventType: viewer-request
+              IncludeBody: "false"
+              LambdaFunctionARN: !Sub arn:aws:lambda:us-east-1:${AWS::AccountId}:function:http-auth:3
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: "true"
+
+        # WebACLId: String
+    # DeletionPolicy: Retain

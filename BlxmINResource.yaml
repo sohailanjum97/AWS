@@ -1,0 +1,261 @@
+
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Sample Template for Investor Portal
+
+Parameters:
+  TargetEnvr:
+    Type: String
+    # Default: dev
+    Description: "The target environment"
+
+  VPCId:
+    Type: String
+    Default: "vpc-091e94554a3b4699e"  #Replace with newly Created VPC ID
+
+  AvailabilityZoneA:
+    Type: String
+    Default: "eu-west-1a"
+
+  AvailabilityZoneB:
+    Type: String
+    Default: "eu-west-1b"
+
+  BastianVMSubnet:
+    Description: "Bastian VM is in Public Subnet A"
+    Type: String
+    Default: "subnet-0a84d706ff97543ee" #Check in which subnet you want to run your instance PVT or PUB change the name
+  
+  BackEndVMSubnetId:
+    Description: "Bastian VM is in Private Subnet A"
+    Type: String
+    Default: "subnet-07e04600d6fa9c4f9" #Check in which subnet you want to run your instance PVT or PUB change the name
+  
+  JenkinsVMSubnetId:
+    Description: "Bastian VM is in Private Subnet A"
+    Type: String
+    Default: "subnet-07e04600d6fa9c4f9" #Check in which subnet you want to run your instance PVT or PUB change the name
+
+  PublicSubnetB:
+    Description: "Public Subnet B"
+    Type: String
+    Default: "subnet-00ffa3e5e044c51a0"
+
+  ElasticIPAddressIP: #Update the Elastic IP as per your VPC
+    Description: "Elastic IP"
+    Type: String
+    Default: "79.125.61.9" 
+  
+  DefaultSecuirtyGroupName:
+    Type: String
+    Default: "sg-09214fa70a6709eb6" #Update the SG Name as per your VPC
+
+  NatGateWayName: #Update the NAT Gatway Name as your VPC
+    Type: String
+    Default: "nat-093e9533acf277f22"
+
+  BackEndInstanceName: #Name of the Backend Instance export values from BlxmInBackend CloudFormation.
+    Type: String
+    Default: i-07589acfc5718cdfd
+
+#DataBase Parameters
+  DBEngineVersion:
+    Description: "PostgreSQL version."
+    Type: String
+    Default: "12.8"
+    AllowedValues:
+      ["12.6", "12.7", "12.8", "12.9", "13.3", "13.4", "13.5", "14.1"]
+
+  DBMasterUsername:
+    Type: String
+
+  DBMasterUserPassword:
+    Description: "The master password for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot. Also ignored when ParentSecretStack is used)."
+    Type: String
+    NoEcho: true
+    MinLength: 8
+
+  DBInstanceClass:
+    Type: String
+    Default: "db.t3.small"
+
+  DBSecurityGroups:
+    Type: String
+    Default: "sg-09214fa70a6709eb6"
+
+#  DBSubnetGroupName:
+#    Type: String
+#    Default: "vpc-0ad4c4bfb63f489bb"
+  
+Conditions:
+  IsProd: !Equals [!Ref TargetEnvr, "prod"]
+
+#  ALBSecurityGroups:
+#    Type: "List<AWS::EC2::SecurityGroup::Id>"
+#    Default: "sg-07a7e500ab744194c"
+#  ALBSubnets:
+#    Type: "List<AWS::EC2::Subnet::Id>"
+#    Default: "subnet-49762223, subnet-74a42708"
+  
+
+Resources:
+  # Elastic Container Repository
+  BlxmINECR:
+    Type: AWS::ECR::Repository
+    Properties:
+      ImageScanningConfiguration:
+        ScanOnPush: "true"
+      # LifecyclePolicy: LifecyclePolicy
+      RepositoryName: !Sub "investors-portal-api/repo"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "in-ecr-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: My App DBSubnetGroup for RDS
+      SubnetIds:
+        - !Ref BackEndVMSubnetId
+        - !Ref PublicSubnetB
+
+  # RDS PostgreSQL
+  BlxmINDBInstance:
+    # DeletionPolicy: Snapshot # default
+    UpdateReplacePolicy: Snapshot
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      DBInstanceIdentifier: !Ref TargetEnvr
+      AllocatedStorage: !If [IsProd, 100, 50]
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: !If [IsProd, 30, 7]
+      CopyTagsToSnapshot: true
+      DBInstanceClass: !Ref DBInstanceClass
+      DBName: INDatabase
+      Port: 5440
+      DBParameterGroupName: !Ref "AWS::NoValue"
+      DBSnapshotIdentifier: !Ref "AWS::NoValue"
+      VPCSecurityGroups: 
+      - !Ref DBSecurityGroups
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      EnableIAMDatabaseAuthentication: false
+      Engine: postgres
+      EngineVersion: !Ref DBEngineVersion
+      KmsKeyId: !Ref "AWS::NoValue"
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterUserPassword
+      MultiAZ: !If [IsProd, true, false]
+      OptionGroupName: !Ref "AWS::NoValue"
+      PreferredBackupWindow: "02:00-02:30"
+      PreferredMaintenanceWindow: "sun:02:40-sun:03:10"
+      StorageType: gp2
+      StorageEncrypted: !Ref "AWS::NoValue"
+    # DeletionPolicy: Retain
+
+  # Cloudwatch log group
+  BlxmINApiLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/aws/ec2/instance/in-api-${TargetEnvr}"
+      RetentionInDays: !If [IsProd, 60, 5]
+      Tags:
+        - Key: "Name"
+          Value: !Sub "in-api-logs-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+# LoadBalancer and its Related Resources
+  BlxmINALB:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Name: !Sub "in-api-lbs-${TargetEnvr}"
+      Scheme: "internet-facing"
+      Type: "application"
+      Subnets: 
+      - !Ref BackEndVMSubnetId
+      - !Ref PublicSubnetB
+      SecurityGroups: 
+      - !Ref DefaultSecuirtyGroupName
+      IpAddressType: "ipv4"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "in-api-lbs-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+  INHTTPListener:
+      Type: "AWS::ElasticLoadBalancingV2::Listener"
+      Properties:
+        LoadBalancerArn: !Ref BlxmINALB
+        Port: 5111
+        Protocol: "HTTP"
+        DefaultActions:
+          - Order: 1
+            TargetGroupArn: !Ref BlxmINBETargetGroup
+            Type: "forward"
+    # DeletionPolicy: Retain
+
+  BlxmINBETargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      HealthCheckIntervalSeconds: 300
+      HealthCheckPath: "/"
+      Port: 5021
+      Protocol: "HTTP"
+      HealthCheckPort: "traffic-port"
+      HealthCheckProtocol: "HTTP"
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 10
+      TargetType: "instance"
+      Matcher:
+        HttpCode: "200"
+      HealthyThresholdCount: 2
+      VpcId: !Ref VPCId
+      Name: TargetGroup 
+      HealthCheckEnabled: true
+      Targets:
+        - Id: !Ref BackEndInstanceName
+          Port: 5021
+    # DeletionPolicy: Retain
+
+# S3 Bucket Cloudformation
+
+  BlxmINS3Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub "in-prepro-bucket"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: "true"
+        BlockPublicPolicy: "true"
+        IgnorePublicAcls: "true"
+        RestrictPublicBuckets: "true"
+    # DeletionPolicy: Retain
+
+  BlxmINS3BucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      PolicyDocument:
+        Id: PolicyForCloudFrontPrivateContent
+        Version: 2012-10-17
+        Statement:
+          - Sid: PolicyForCloudFrontPrivateContent
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity "
+                  - !Ref BlxmINCloudfrontOAI
+            Action: "s3:GetObject"
+            Resource: !Join
+              - ""
+              - - "arn:aws:s3:::"
+                - !Ref BlxmINS3Bucket
+                - /*
+      Bucket: !Ref BlxmINS3Bucket
+
+  BlxmINCloudfrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "in-fe-${TargetEnvr}"
+ 
