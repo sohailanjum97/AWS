@@ -1,4 +1,3 @@
-
 AWSTemplateFormatVersion: 2010-09-09
 Description: AWS CloudFormation Sample Template for Investor Portal
 
@@ -10,7 +9,7 @@ Parameters:
 
   VPCId:
     Type: String
-    Default: "vpc-091e94554a3b4699e"  #Replace with newly Created VPC ID
+    Default: "vpc-091e94554a3b4699e" #Replace with newly Created VPC ID
 
   AvailabilityZoneA:
     Type: String
@@ -24,12 +23,12 @@ Parameters:
     Description: "Bastian VM is in Public Subnet A"
     Type: String
     Default: "subnet-0a84d706ff97543ee" #Check in which subnet you want to run your instance PVT or PUB change the name
-  
+
   BackEndVMSubnetId:
     Description: "Bastian VM is in Private Subnet A"
     Type: String
     Default: "subnet-07e04600d6fa9c4f9" #Check in which subnet you want to run your instance PVT or PUB change the name
-  
+
   JenkinsVMSubnetId:
     Description: "Bastian VM is in Private Subnet A"
     Type: String
@@ -40,11 +39,17 @@ Parameters:
     Type: String
     Default: "subnet-00ffa3e5e044c51a0"
 
+  PrivateSubnetB:
+    Description: "Public Subnet B"
+    Type: String
+    Default: "subnet-015b6495f431f538a"
+  
+
   ElasticIPAddressIP: #Update the Elastic IP as per your VPC
     Description: "Elastic IP"
     Type: String
-    Default: "79.125.61.9" 
-  
+    Default: "79.125.61.9"
+
   DefaultSecuirtyGroupName:
     Type: String
     Default: "sg-09214fa70a6709eb6" #Update the SG Name as per your VPC
@@ -57,7 +62,10 @@ Parameters:
     Type: String
     Default: i-07589acfc5718cdfd
 
-#DataBase Parameters
+  JenkinsInstanceName: #Name of the Backend Instance export values from BlxmInBackend CloudFormation.
+    Type: String
+    Default: i-08a166852555b8122
+  #DataBase Parameters
   DBEngineVersion:
     Description: "PostgreSQL version."
     Type: String
@@ -78,14 +86,11 @@ Parameters:
     Type: String
     Default: "db.t3.small"
 
-  DBSecurityGroups:
-    Type: String
-    Default: "sg-09214fa70a6709eb6"
 
 #  DBSubnetGroupName:
 #    Type: String
 #    Default: "vpc-0ad4c4bfb63f489bb"
-  
+
 Conditions:
   IsProd: !Equals [!Ref TargetEnvr, "prod"]
 
@@ -95,9 +100,23 @@ Conditions:
 #  ALBSubnets:
 #    Type: "List<AWS::EC2::Subnet::Id>"
 #    Default: "subnet-49762223, subnet-74a42708"
-  
 
 Resources:
+  # Creating Security Group
+  DBSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: My Global Security Group
+        VpcId: !Ref VPCId
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: '5440'
+            ToPort: '5440'
+            CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+          - IpProtocol: -1
+            CidrIp: 0.0.0.0/0
+
   # Elastic Container Repository
   BlxmINECR:
     Type: AWS::ECR::Repository
@@ -116,8 +135,10 @@ Resources:
     Properties:
       DBSubnetGroupDescription: My App DBSubnetGroup for RDS
       SubnetIds:
+        - !Ref BastianVMSubnet
         - !Ref BackEndVMSubnetId
         - !Ref PublicSubnetB
+        - !Ref PrivateSubnetB
 
   # RDS PostgreSQL
   BlxmINDBInstance:
@@ -136,8 +157,8 @@ Resources:
       Port: 5440
       DBParameterGroupName: !Ref "AWS::NoValue"
       DBSnapshotIdentifier: !Ref "AWS::NoValue"
-      VPCSecurityGroups: 
-      - !Ref DBSecurityGroups
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
       DBSubnetGroupName: !Ref DBSubnetGroup
       EnableIAMDatabaseAuthentication: false
       Engine: postgres
@@ -164,18 +185,33 @@ Resources:
           Value: !Sub "in-api-logs-${TargetEnvr}"
     # DeletionPolicy: Retain
 
-# LoadBalancer and its Related Resources
+  BlxmALBSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: My Global Security Group
+        VpcId: !Ref VPCId
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: '5111'
+            ToPort: '5111'
+            CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+          - IpProtocol: -1
+            CidrIp: 0.0.0.0/0
+
+
+  # LoadBalancer and its Related Resources
   BlxmINALB:
     Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
     Properties:
       Name: !Sub "in-api-lbs-${TargetEnvr}"
       Scheme: "internet-facing"
       Type: "application"
-      Subnets: 
-      - !Ref BackEndVMSubnetId
-      - !Ref PublicSubnetB
-      SecurityGroups: 
-      - !Ref DefaultSecuirtyGroupName
+      Subnets:
+        - !Ref BastianVMSubnet
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref BlxmALBSecurityGroup
       IpAddressType: "ipv4"
       Tags:
         - Key: "Name"
@@ -183,15 +219,15 @@ Resources:
     # DeletionPolicy: Retain
 
   INHTTPListener:
-      Type: "AWS::ElasticLoadBalancingV2::Listener"
-      Properties:
-        LoadBalancerArn: !Ref BlxmINALB
-        Port: 5111
-        Protocol: "HTTP"
-        DefaultActions:
-          - Order: 1
-            TargetGroupArn: !Ref BlxmINBETargetGroup
-            Type: "forward"
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      LoadBalancerArn: !Ref BlxmINALB
+      Port: 5111
+      Protocol: "HTTP"
+      DefaultActions:
+        - Order: 1
+          TargetGroupArn: !Ref BlxmINBETargetGroup
+          Type: "forward"
     # DeletionPolicy: Retain
 
   BlxmINBETargetGroup:
@@ -210,14 +246,14 @@ Resources:
         HttpCode: "200"
       HealthyThresholdCount: 2
       VpcId: !Ref VPCId
-      Name: TargetGroup 
+      Name: TargetGroup
       HealthCheckEnabled: true
       Targets:
         - Id: !Ref BackEndInstanceName
           Port: 5021
     # DeletionPolicy: Retain
 
-# S3 Bucket Cloudformation
+  # S3 Bucket Cloudformation
 
   BlxmINS3Bucket:
     Type: "AWS::S3::Bucket"
@@ -258,4 +294,72 @@ Resources:
     Properties:
       CloudFrontOriginAccessIdentityConfig:
         Comment: !Sub "in-fe-${TargetEnvr}"
- 
+
+# Load Balacer for Jenkins VM
+  BlxmALBSecurityGroupforJenkins:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: My Global Security Group
+        VpcId: !Ref VPCId
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: '80'
+            ToPort: '80'
+            CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+          - IpProtocol: -1
+            CidrIp: 0.0.0.0/0
+
+
+  # LoadBalancer and its Related Resources
+  BlxmINALBforJenkinsv:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Name: !Sub "inlbsjenkinsv-${TargetEnvr}"
+      Scheme: "internet-facing"
+      Type: "application"
+      Subnets:
+        - !Ref BastianVMSubnet
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref BlxmALBSecurityGroupforJenkins
+      IpAddressType: "ipv4"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "inlbsjenkinsv-${TargetEnvr}"
+    # DeletionPolicy: Retain
+
+  INHTTPListenerforJenkins:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      LoadBalancerArn: !Ref BlxmINALBforJenkinsv
+      Port: 80
+      Protocol: "HTTP"
+      DefaultActions:
+        - Order: 1
+          TargetGroupArn: !Ref BlxmINBETargetGroupforJenkinsv
+          Type: "forward"
+    # DeletionPolicy: Retain
+
+  BlxmINBETargetGroupforJenkinsv:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      HealthCheckIntervalSeconds: 300
+      HealthCheckPath: "/"
+      Port: 80
+      Protocol: "HTTP"
+      HealthCheckPort: "traffic-port"
+      HealthCheckProtocol: "HTTP"
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 10
+      TargetType: "instance"
+      Matcher:
+        HttpCode: "200"
+      HealthyThresholdCount: 2
+      VpcId: !Ref VPCId
+      Name: TargetGroupforJenkinsv
+      HealthCheckEnabled: true
+      Targets:
+        - Id: !Ref JenkinsInstanceName
+          Port: 8080
+    # DeletionPolicy: Retain

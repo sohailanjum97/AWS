@@ -38,7 +38,11 @@ Resources:
       Tags:
       - Key: Name
         Value:  IN-PrePro
-
+  
+  InDevKeyPair:
+    Type: 'AWS::EC2::KeyPair'
+    Properties:
+      KeyName: In-dev-keypair
 # Internet Gateway for VPC and !Ref parameter is used to fetch the name of VPC
 # Our VPC will need internet access:      
   InternetGateway:
@@ -303,3 +307,9 @@ Outputs:
     Description: Name of the Security Group
     Export:
       Name: !Sub "${AWS::StackName}-DefaultSecurityGroup"
+  
+  InDevKeyPairName:
+    Value: !Ref InDevKeyPair
+    Description: Name of the Security Group
+    Export:
+      Name: !Sub "${AWS::StackName}-KeyPairName"
