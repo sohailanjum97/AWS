@@ -1,5 +1,5 @@
 # AWS
-AWS Cloudformation 
+AWS Cloudformation. YAML
 
 The aws.yml file contains code for cloudformation stacks. 
 this yml code is very simple and easy to understande for beginners.
